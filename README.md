@@ -1,18 +1,19 @@
-# API Marlin Mint
+# Marlin Mint API
 
+This document describes the Marlin Mint API: available endpoints, request and response formats, status values, error codes, and webhook signature verification. It is intended for developers integrating payment intake and payout flows.
 
 ## Base URL
 ```
 https://api.marlinmint.com/v1
 ```
 
-Стенд для интеграции:
+Integration (test) environment:
 ```
 https://api-test.marlinmint.com/v1
 ```
 
 ## Authentication
-Все запросы требуют заголовок `Authorization` с вашим API-ключом.
+All requests require an `Authorization` header with your API key.
 
 ```
 Authorization: <your-api-key>
@@ -25,7 +26,7 @@ Content-Type: application/json
 
 **Endpoint:** `POST /payments/checkout`
 
-### Request (редирект на платёжную страницу)
+### Request (redirect to payment page)
 ```json
 {
     "sum_total": "1000.00",
@@ -40,9 +41,9 @@ Content-Type: application/json
 }
 ```
 
-### Request с реквизитами (no_ui)
-Сервер-к-серверу, без нашей платёжной страницы: в ответе придут реквизиты
-для перевода, показывать их плательщику вы будете сами.
+### Request with credentials (no_ui)
+Server-to-server, without our payment page: the response will contain the
+transfer details, which you display to the payer yourself.
 
 ```json
 {
@@ -58,7 +59,7 @@ Content-Type: application/json
 }
 ```
 
-### Request с картой (rail: acquiring)
+### Request with card (rail: acquiring)
 ```json
 {
     "sum_total": "1000.00",
@@ -106,7 +107,7 @@ Content-Type: application/json
 
 **Endpoint:** `POST /payments/checkout`
 
-### Вывод на карту
+### Payout to card
 ```json
 {
     "sum_total": "500.00",
@@ -152,7 +153,7 @@ Content-Type: application/json
 GET /payments/pay_in_abc123/lookup
 ```
 
-### Response — в процессе, реквизиты выданы
+### Response — processing, credentials issued
 ```json
 {
     "txn_ref": "pay_in_abc123",
@@ -174,7 +175,7 @@ GET /payments/pay_in_abc123/lookup
 }
 ```
 
-### Response — успех
+### Response — success
 ```json
 {
     "txn_ref": "pay_in_abc123",
@@ -192,7 +193,7 @@ GET /payments/pay_in_abc123/lookup
 }
 ```
 
-### Response — отказ
+### Response — declined
 ```json
 {
     "txn_ref": "pay_in_abc123",
@@ -229,8 +230,8 @@ GET /payments/pay_in_abc123/lookup
 
 **Endpoint:** `POST /payments/{txn_ref}/claim`
 
-Оспаривание результата по платежу. Тело — `multipart/form-data`: от 1 до 3
-вложений (до 50 MB каждое) и необязательный `comment`. Ответ:
+Disputes the result of a payment. Body — `multipart/form-data`: 1 to 3
+attachments (up to 50 MB each) and an optional `comment`. Response:
 
 ```json
 {
@@ -242,18 +243,19 @@ GET /payments/pay_in_abc123/lookup
 
 ## Stage Values
 
-Те же пять состояний, что в кабинете мерчанта и в CSV-выгрузке.
+The same five states shown in the merchant portal and the CSV export.
 
-| Stage | Описание |
-|-------|----------|
-| `open` | создан, плательщик ещё не подтвердил перевод |
-| `authorized` | деньги подтверждены, идёт проводка |
-| `cleared` | завершён полностью |
-| `part_cleared` | завершён частично, пришло меньше запрошенного |
-| `unsettled` | не состоялся: отказ, отмена, истёк срок, реверс или чарджбэк |
+| Stage | Description |
+|-------|--------------|
+| `open` | created, payer has not yet confirmed the transfer |
+| `authorized` | funds confirmed, settlement in progress |
+| `cleared` | completed in full |
+| `part_cleared` | completed partially, less than requested was received |
+| `unsettled` | did not go through: decline, cancellation, expiry, reversal, or chargeback |
 
-Терминальные — `cleared`, `part_cleared`, `unsettled`. Остальные могут
-измениться, опрашивать статус или ждать вебхук нужно до терминального.
+Terminal states — `cleared`, `part_cleared`, `unsettled`. Any other state can
+still change; poll the status or wait for the webhook until a terminal state
+is reached.
 
 ---
 
@@ -270,45 +272,45 @@ GET /payments/pay_in_abc123/lookup
 }
 ```
 
-| Reason | Описание | HTTP |
-|--------|----------|------|
-| `invalid_input` | неверные параметры запроса | 400, 422 |
-| `payment_rejected` | ошибка обработки платежа | 400 |
-| `not_authorized` | ошибка аутентификации или домен не разрешён | 401, 403 |
-| `internal_failure` | внутренняя ошибка | 500 |
+| Reason | Description | HTTP |
+|--------|--------------|------|
+| `invalid_input` | invalid request parameters | 400, 422 |
+| `payment_rejected` | payment processing error | 400 |
+| `not_authorized` | authentication error or domain not allowed | 401, 403 |
+| `internal_failure` | internal error | 500 |
 
-`invalid_fields` заполняется только при ошибках валидации тела запроса —
-список полей с описанием проблемы, иначе `null`.
+`invalid_fields` is populated only for request body validation errors — a
+list of fields with a description of the issue, otherwise `null`.
 
 ---
 
 ## Webhook Notification
 
-При смене стадии на ваш `hook_url` уходит POST.
+A POST request is sent to your `hook_url` whenever the stage changes.
 
-### Проверка подписи (RSA SHA-256)
+### Signature Verification (RSA SHA-256)
 
-Каждый callback можно проверить с помощью RSA SHA-256 подписи для
-подтверждения подлинности и целостности.
+Each callback can be verified using an RSA SHA-256 signature to confirm
+authenticity and integrity.
 
-**Порядок проверки:**
+**Verification flow:**
 
-1. Извлечь тело запроса как есть (точная JSON-строка, без модификаций).
-2. Вычислить SHA-256 хеш тела.
-3. Проверить подпись с помощью публичного ключа.
+1. Extract the raw request body exactly as received (no modifications).
+2. Calculate the SHA-256 hash of the body.
+3. Verify the signature using the public key.
 
-**Заголовок подписи:**
+**Signature header:**
 ```
 X-Signature
 ```
 
-**Правила проверки:**
+**Verification rules:**
 
-* Алгоритм: RSA + SHA256
-* Кодировка: Base64
-* Callback с некорректной подписью должен быть отклонён
+* Algorithm: RSA + SHA256
+* Encoding: Base64
+* Any callback with an invalid signature must be rejected
 
-### Пример payload
+### Example payload
 ```json
 {
     "txn_ref": "pay_in_abc123",
@@ -324,9 +326,9 @@ X-Signature
 }
 ```
 
-Отвечайте `200` — иначе доставка будет повторяться. Обработчик должен быть
-идемпотентным по `txn_ref`: на один платёж может прийти несколько
-уведомлений (например `authorized`, затем `cleared`).
+Respond with `200` — otherwise delivery will be retried. Your handler must be
+idempotent by `txn_ref`: a single payment may generate several notifications
+(e.g. `authorized`, then `cleared`).
 
 ---
 
@@ -334,64 +336,64 @@ X-Signature
 
 ### Request Fields
 
-| Field | Type | Required | Описание |
-|-------|------|----------|----------|
-| `sum_total` | string | да | сумма транзакции |
-| `currency_iso` | string | да | код ISO 4217 (`UAH`) |
-| `flow_type` | string | да | `intake` (приём) или `payout` (выплата) |
-| `rail` | string | да | `p2p` (карта-в-карту / банковский перевод) или `acquiring` (эквайринг карт) |
-| `network` | string | нет | платёжная сеть, если применимо |
-| `order_ref` | string | да | ваш уникальный идентификатор, 5–64 символа |
-| `payer_ref` | string | да | идентификатор плательщика на вашей стороне |
-| `payer_name` | string | нет | имя плательщика |
-| `hook_url` | string | да | URL для вебхуков |
-| `done_url` | string | условно | обязателен, если `no_ui` не задан |
-| `no_ui` | boolean | нет | режим без нашей платёжной страницы |
-| `intake_details` | object | нет | реквизиты приёма |
-| `remit_details` | object | нет | реквизиты выплаты |
+| Field | Type | Required | Description |
+|-------|------|----------|--------------|
+| `sum_total` | string | yes | transaction amount |
+| `currency_iso` | string | yes | ISO 4217 code (`UAH`) |
+| `flow_type` | string | yes | `intake` (deposit) or `payout` (withdrawal) |
+| `rail` | string | yes | `p2p` (card-to-card / bank transfer) or `acquiring` (card acquiring) |
+| `network` | string | no | payment network, if applicable |
+| `order_ref` | string | yes | your unique reference, 5–64 characters |
+| `payer_ref` | string | yes | payer identifier on your side |
+| `payer_name` | string | no | payer full name |
+| `hook_url` | string | yes | webhook URL |
+| `done_url` | string | conditional | required if `no_ui` is not set |
+| `no_ui` | boolean | no | mode without our payment page |
+| `intake_details` | object | no | deposit credentials |
+| `remit_details` | object | no | withdrawal credentials |
 
-`order_ref` — ключ идемпотентности. Повторный запрос с тем же `order_ref`
-вернёт существующий платёж, а не создаст новый.
+`order_ref` is the idempotency key. A repeated request with the same
+`order_ref` returns the existing payment instead of creating a new one.
 
-### intake_details (приём)
+### intake_details (deposit)
 
-| Field | Type | Описание |
-|-------|------|----------|
-| `issuer` | string | банк для подбора P2P-реквизитов |
-| `card_input` | object | данные карты для `rail: acquiring` |
+| Field | Type | Description |
+|-------|------|--------------|
+| `issuer` | string | bank name for P2P matching |
+| `card_input` | object | card details for `rail: acquiring` |
 
 ### card_input
 
-| Field | Type | Описание |
-|-------|------|----------|
-| `card_number` | string | номер карты |
-| `expiry_month` | number | месяц истечения |
-| `expiry_year` | number | год истечения (2 цифры) |
+| Field | Type | Description |
+|-------|------|--------------|
+| `card_number` | string | card number |
+| `expiry_month` | number | expiry month |
+| `expiry_year` | number | expiry year (2 digits) |
 | `security_code` | string | CVV/CVC |
 
-### remit_details (выплата)
+### remit_details (withdrawal)
 
-| Field | Type | Описание |
-|-------|------|----------|
-| `dest_account` | string | номер карты, 16 цифр |
-| `to_name` | string | ФИО получателя |
-| `iban_code` | string | IBAN для международных переводов |
-| `tax_number` | string | налоговый идентификатор |
+| Field | Type | Description |
+|-------|------|--------------|
+| `dest_account` | string | card number, 16 digits |
+| `to_name` | string | recipient full name |
+| `iban_code` | string | IBAN for international transfers |
+| `tax_number` | string | tax ID |
 
 ### Response Fields
 
-| Field | Type | Описание |
-|-------|------|----------|
-| `txn_ref` | string | наш идентификатор платежа |
-| `order_ref` | string | ваш идентификатор из запроса |
-| `stage` | string | стадия платежа, см. Stage Values |
-| `sum_total` | string | запрошенная сумма |
-| `sum_settled` | string \| null | фактически проведённая сумма |
-| `currency_iso` | string | код ISO 4217 |
-| `network` | string \| null | платёжная сеть |
-| `pay_page_url` | string \| null | ссылка на платёжную страницу |
-| `started_at` | string | момент создания, ISO 8601 |
-| `finished_at` | string \| null | момент завершения, ISO 8601 |
-| `failure_note` | string \| null | причина отказа |
-| `valid_till` | string \| null | срок жизни платежа, если задан |
-| `bank_details` | object \| null | реквизиты для перевода в режиме `no_ui` |
+| Field | Type | Description |
+|-------|------|--------------|
+| `txn_ref` | string | our payment identifier |
+| `order_ref` | string | your identifier from the request |
+| `stage` | string | payment stage, see Stage Values |
+| `sum_total` | string | requested amount |
+| `sum_settled` | string \| null | amount actually settled |
+| `currency_iso` | string | ISO 4217 code |
+| `network` | string \| null | payment network |
+| `pay_page_url` | string \| null | link to the payment page |
+| `started_at` | string | creation time, ISO 8601 |
+| `finished_at` | string \| null | completion time, ISO 8601 |
+| `failure_note` | string \| null | decline reason |
+| `valid_till` | string \| null | payment expiry, if set |
+| `bank_details` | object \| null | transfer details in `no_ui` mode |
