@@ -1,6 +1,5 @@
-# Type9 API (Marlin Mint) — Examples
+# API Marlin Mint
 
-> **Статус:** черновик на основе PaySwiss (UAH, P2P/Acquiring), оформлен по конвенциям Type9.
 
 ## Base URL
 ```
